@@ -1821,6 +1821,14 @@ describe('makeResolver — slug-path exact getPage (step 1 broadened)', () => {
     expect(await r.resolve('people/pedro')).toBe('people/pedro');
   });
 
+  test('slug with "." in a segment (version number, domain) resolves via exact getPage', async () => {
+    const r = makeResolver(fakeEngine(['requests/x/template-1.0.0-alignment', 'companies/acme.io']));
+    expect(await r.resolve('requests/x/template-1.0.0-alignment')).toBe('requests/x/template-1.0.0-alignment');
+    expect(await r.resolve('companies/acme.io')).toBe('companies/acme.io');
+    // Still exact: a dotted slug with no matching page stays unresolved.
+    expect(await r.resolve('companies/acme.com')).toBeNull();
+  });
+
   test('exact-only: slug-shaped value with no matching page falls through (no false positive)', async () => {
     // `90-people/ghost` is slug-shaped but absent → step-1 getPage misses,
     // no fuzzy hit → null. Never invents an edge.

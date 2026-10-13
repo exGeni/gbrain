@@ -86,6 +86,30 @@ describe('unmanaged brain', () => {
   }, 120_000);
 });
 
+describe('frontmatter links to pages whose slug contains a "."', () => {
+  let engine: PGLiteEngine;
+  beforeAll(async () => {
+    engine = new PGLiteEngine();
+    await engine.connect({});
+    await engine.initSchema();
+  }, 60_000);
+  afterAll(async () => { await engine.disconnect(); }, 60_000);
+
+  test('related: to an existing dotted slug creates the edge, leaves no wanted row and the sweep settles', async () => {
+    // Titles are unrelated to the slugs on purpose: a similar title would let the pg_trgm
+    // title fallback (step 3) resolve the reference and mask the exact-slug gate.
+    const dotted = ['requests/x/template-1.0.0-alignment', 'companies/acme.io'];
+    await engine.putPage(dotted[0]!, { type: 'note', title: 'Roadmap notes', compiled_truth: 'Target.', timeline: '' });
+    await engine.putPage(dotted[1]!, { type: 'company', title: 'Example Co', compiled_truth: 'Target.', timeline: '' });
+    await engine.putPage('products/p1', { type: 'note', title: 'P1', compiled_truth: 'P1.', timeline: '', frontmatter: { related: dotted } });
+    await extractStaleFromDB(engine, { dryRun: false, jsonMode: true, quiet: true, catchUp: true, includeFrontmatter: true });
+    expect(await engine.executeRaw(`SELECT t.slug AS target FROM links l JOIN pages f ON f.id=l.from_page_id JOIN pages t ON t.id=l.to_page_id
+      WHERE f.slug='products/p1' ORDER BY t.slug`)).toEqual([{ target: 'companies/acme.io' }, { target: 'requests/x/template-1.0.0-alignment' }]);
+    expect(await engine.executeRaw('SELECT target_ref FROM wanted_links')).toEqual([]);
+    expect(await engine.countStalePagesForExtraction({ versionTs: LINK_EXTRACTOR_VERSION_TS })).toBe(0);
+  }, 120_000);
+});
+
 describe('#6228/#6225 targets no page can have, unmanaged brain', () => {
   let engine: PGLiteEngine;
   beforeAll(async () => {

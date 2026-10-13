@@ -61,7 +61,7 @@ import {
   extractFrontmatterLinks, isGlobalBasenameEnabled, isCrossSourceLinksEnabled,
   WIKILINK_BASENAME_LINK_TYPE,
   buildBasenameIndex, queryBasenameIndex, stripCodeBlocks, normalizeBasename,
-  parseInlineCitationTimelineEntries,
+  parseInlineCitationTimelineEntries, EXACT_SLUG_SHAPE_RE,
   type UnresolvedFrontmatterRef, type LinkCandidate, type LinkExtractionPack,
 } from '../core/link-extraction.ts';
 // #3190: pack-aware link typing on every extract surface (db/stale/fs).
@@ -624,7 +624,7 @@ export async function extractLinksFromFile(
         // Same broadened slug-shape as makeResolver step 1: accepts
         // digit-leading folders (`90-people/nicolai`) and nested paths.
         // Exact Set membership guards it — no false positives.
-        if (/\//.test(trimmed) && /^[a-z0-9][a-z0-9/_-]*$/.test(trimmed) && allSlugs.has(trimmed)) {
+        if (/\//.test(trimmed) && EXACT_SLUG_SHAPE_RE.test(trimmed) && allSlugs.has(trimmed)) {
           return canonical(trimmed);
         }
         const hints = Array.isArray(dirHint) ? dirHint : (dirHint ? [dirHint] : []);

@@ -140,6 +140,16 @@ describe('extractLinksFromFile', () => {
     expect(related[0].to_slug).toBe('90-people/nicolai');
   });
 
+  it('resolves a frontmatter slug-path whose segment contains "." (fs resolver)', async () => {
+    // Dots are legal in slugs (validateSlug, slugifySegment keep them): version
+    // numbers and domains. The fs resolver's exact-slug gate must accept them.
+    const content = '---\nrelated:\n  - requests/x/template-1.0.0-alignment\n  - companies/acme.io\ntype: concept\n---\nContent.';
+    const allSlugs = new Set(['wiki/note', 'requests/x/template-1.0.0-alignment', 'companies/acme.io']);
+    const links = await extractLinksFromFile(content, 'wiki/note.md', allSlugs, { includeFrontmatter: true });
+    const related = links.filter(l => l.link_type === 'related_to').map(l => l.to_slug).sort();
+    expect(related).toEqual(['companies/acme.io', 'requests/x/template-1.0.0-alignment']);
+  });
+
   it('frontmatter extraction is default OFF (back-compat)', async () => {
     // Without includeFrontmatter, fs-source no longer auto-extracts frontmatter.
     // Matches db-source behavior. User opts in with --include-frontmatter flag.
