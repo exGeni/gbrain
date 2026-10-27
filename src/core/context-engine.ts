@@ -698,7 +698,9 @@ function formatContextBlock(ctx: LiveContext): string {
 
   // Time/Day vs Timezone-unavailable branch.
   if (ctx.now && ctx.dayOfWeek && ctx.timezone !== UNKNOWN_TZ) {
-    lines.push(`- **Time:** ${ctx.now} (${ctx.timezone})`);
+    // LOCAL PATCH (t-20261018-01, owner go 2026-10-19): date only. A per-run clock in
+    // systemPromptAddition sits before the message history and busts the Anthropic prompt cache every run.
+    lines.push(`- **Date:** ${ctx.now.slice(0, 10)} (${ctx.timezone}); exact time: session_status`);
     lines.push(`- **Day:** ${ctx.dayOfWeek}`);
   } else {
     // Missing location config or an active flight to an unmapped airport.
@@ -710,7 +712,8 @@ function formatContextBlock(ctx: LiveContext): string {
   lines.push(`- **Location:** ${ctx.location.city} (source: ${ctx.location.source})`);
 
   if (ctx.homeTime && ctx.homeLocation) {
-    lines.push(`- **Home (${ctx.homeLocation.city}):** ${ctx.homeTime}`);
+    // LOCAL PATCH (t-20261023-01): zone only; homeTime still gates a valid home timezone.
+    lines.push(`- **Home (${ctx.homeLocation.city}):** ${ctx.homeLocation.tz}`);
   }
   if (ctx.activeTravel) {
     lines.push(`- **Active travel:** ${ctx.activeTravel}`);

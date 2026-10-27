@@ -9,11 +9,12 @@
  * - Travel timezone resolution
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, setSystemTime } from 'bun:test';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { createGBrainContextEngine, ENGINE_ID, ENGINE_NAME, __resetSdkLoadStateForTests } from '../src/core/context-engine.ts';
+import { __setBackupStatusPathForTests } from '../src/core/backup/status-file.ts';
 
 interface WorkspaceOpts {
   heartbeat?: Record<string, unknown>;
@@ -79,8 +80,47 @@ describe('gbrain-context engine', () => {
     expect(result.systemPromptAddition).toContain('Live Context');
     expect(result.systemPromptAddition).toContain('America/Toronto');
     expect(result.systemPromptAddition).toContain('Markham');
-    // Should include explicitly configured home time while traveling.
-    expect(result.systemPromptAddition).toMatch(/Home \(San Francisco\):.*P[SD]T/);
+    // Should include explicitly configured home timezone while traveling (LOCAL PATCH t-20261023-01: zone, no clock).
+    expect(result.systemPromptAddition).toContain('**Home (San Francisco):** America/Los_Angeles');
+  });
+
+  // LOCAL PATCH t-20261018-01 / t-20261023-01: systemPromptAddition sits before the message
+  // history, so a clock in it busts the prompt cache every run. Calendar and quiet-hours
+  // transitions are legitimate changes and are kept out of this fixture.
+  it('Live Context carries no clock: same bytes at two instants of one local day', async () => {
+    tmpDir = makeWorkspace({
+      heartbeat: {
+        userAwake: true,
+        currentLocation: { city: 'Markham', timezone: 'America/Toronto', source: 'user-confirmed' },
+        homeLocation: { city: 'San Francisco', timezone: 'America/Los_Angeles' },
+      },
+    });
+    // The 24h-latched backup-coverage line reads the host's backup-status.json and fires on
+    // the first assemble only; point it at an absent file so the fixture is host-independent.
+    __setBackupStatusPathForTests(join(tmpDir, 'no-backup-status.json'));
+    const engine = createGBrainContextEngine({ workspaceDir: tmpDir });
+    const at = async (iso: string) => {
+      setSystemTime(new Date(iso));
+      try {
+        return (await engine.assemble({ sessionId: 'test-session', messages: [], tokenBudget: 100000 })).systemPromptAddition ?? '';
+      } finally {
+        setSystemTime();
+      }
+    };
+    let first: string;
+    let second: string;
+    try {
+      first = await at('2026-03-10T15:02:07Z');
+      second = await at('2026-03-10T15:47:51Z');
+    } finally {
+      __setBackupStatusPathForTests(null);
+    }
+
+    expect(first).toContain('- **Date:** 2026-03-10 (America/Toronto)');
+    expect(first).toContain('- **Home (San Francisco):** America/Los_Angeles');
+    const clockLines = first.split('\n').filter(l => /\*\*(Date|Time|Home)/.test(l) && /\d{1,2}:\d{2}/.test(l));
+    expect(clockLines).toEqual([]);
+    expect(second).toBe(first);
   });
 
   it('does not guess a city or timezone when no location is configured', async () => {
