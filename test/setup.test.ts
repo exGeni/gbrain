@@ -27,6 +27,7 @@ import { hookEntryHash, removeClaudeHooksAt, writeClaudeHooksAt } from '../src/c
 import { GBRAIN_HOOK_MARKER_VALUE } from '../src/core/bootstrap/host-specs.ts';
 import { codexHookTrustHash, codexTrustHash, removeCodexHooks, writeCodexHooks } from '../src/core/bootstrap/codex-hooks.ts';
 import { appendCodexTomlTable, removeCodexTomlTable } from '../src/core/bootstrap/codex-toml.ts';
+import { writeHarnessReceipt, type HarnessTarget } from '../src/core/bootstrap/format.ts';
 import { defineNormalizer, expectGolden, scrubTimestamps } from './helpers/golden.ts';
 import { VERSION } from '../src/version.ts';
 
@@ -833,5 +834,57 @@ describe('codex trust hash and hash-owned TOML tables', () => {
     const split = readFileSync(path, 'utf8');
     expect(removeCodexTomlTable(path, ['mcp_servers', 'gbrain'])).toBe('unlocatable');
     expect(readFileSync(path, 'utf8')).toBe(split);
+  });
+});
+
+// LOCAL PATCH (garrytan/gbrain#7771): the bootstrap harness lane refuses setup only
+// for the configuration setup wires, not for the whole install.
+describe('gbrain setup: harness_lane is scoped to the configuration setup writes (#7771)', () => {
+  const harnessReceipt = (b: Box, targets: HarnessTarget[]): void => writeHarnessReceipt(join(b.gbrainHome, '.gbrain'), {
+    harness_receipt_version: 1, created_at: '2026-10-27T00:00:00Z', created_by: 'test', url: 'http://127.0.0.1:1/mcp',
+    source_id: 'default', token: { name: 'test', minted: false }, targets,
+  } as any);
+  const otherHome = (b: Box): string => { const h = join(b.root, 'other-home'); mkdirSync(join(h, '.claude'), { recursive: true }); mkdirSync(join(h, '.codex'), { recursive: true }); return h; };
+  const claudeHooks = (path: string, scope = 'user'): HarnessTarget => ({ host: 'claude-code', kind: 'hooks', state: 'confirmed', scope, path, marker: 'bootstrap-harness-v1' } as HarnessTarget);
+
+  test('claude-code: hooks wired into another HOME\'s settings do not refuse; the same settings file does', async () => {
+    const b = box();
+    const other = otherHome(b);
+    harnessReceipt(b, [
+      { host: 'claude-code', kind: 'mcp', state: 'confirmed', scope: 'user', name: 'gbrain', mechanism: 'claude-cli' } as HarnessTarget,
+      claudeHooks(join(other, '.claude', 'settings.json')),
+    ]);
+    const ok = await setup(b, ['claude-code', '--dry-run', '--json']);
+    expect(ok.exitCode).toBe(0);
+    expect(ok.doc.code).toBeUndefined();
+
+    harnessReceipt(b, [claudeHooks(join(other, '.claude', 'settings.json')), claudeHooks(settings(b))]);
+    const refused = await setup(b, ['claude-code', '--dry-run', '--json']);
+    expect(refused.exitCode).toBe(1);
+    expect(refused.doc).toMatchObject({ code: 'setup_owner_conflict', reason: 'harness_lane' });
+  });
+
+  test('claude-code: project-scope bootstrap hooks refuse from any HOME', async () => {
+    const b = box();
+    const project = join(b.root, 'proj');
+    mkdirSync(join(project, '.claude'), { recursive: true });
+    harnessReceipt(b, [claudeHooks(join(project, '.claude', 'settings.local.json'), project)]);
+    const refused = await setup(b, ['claude-code', '--dry-run', '--json']);
+    expect(refused.exitCode).toBe(1);
+    expect(refused.doc).toMatchObject({ code: 'setup_owner_conflict', reason: 'harness_lane' });
+  });
+
+  test('codex: a bootstrap Codex lane in another CODEX_HOME does not refuse; the same CODEX_HOME does', async () => {
+    const b = box();
+    const other = otherHome(b);
+    harnessReceipt(b, [{ host: 'codex', kind: 'mcp', state: 'confirmed', scope: 'user', path: join(other, '.codex', 'config.toml'), name: 'gbrain', mechanism: 'toml-block' } as HarnessTarget]);
+    const ok = await setup(b, ['codex', '--dry-run', '--json']);
+    expect(ok.exitCode).toBe(0);
+    expect(ok.doc.code).toBeUndefined();
+
+    harnessReceipt(b, [{ host: 'codex', kind: 'mcp', state: 'confirmed', scope: 'user', path: codexToml(b), name: 'gbrain', mechanism: 'toml-block' } as HarnessTarget]);
+    const refused = await setup(b, ['codex', '--dry-run', '--json']);
+    expect(refused.exitCode).toBe(1);
+    expect(refused.doc).toMatchObject({ code: 'setup_owner_conflict', reason: 'harness_lane' });
   });
 });
