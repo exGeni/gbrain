@@ -23,7 +23,7 @@
  * Engine-free: setup never opens the database itself.
  */
 import { realpathSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { basename, dirname, resolve as resolvePath } from 'node:path';
 import { removeHermesTurnHook, syncHermesTurnHook } from '../core/setup/hermes-turn-hook.ts';
 import { removeOpenclawTurnPlugin, syncOpenclawTurnPlugin } from '../core/setup/openclaw-turn-plugin.ts';
 import { opError, OperationError } from '../core/ops/contract.ts';
@@ -280,6 +280,17 @@ async function refuse(e: OperationError, out: Out): Promise<number> {
 
 const verifyDryRun = (harness: string, name: string): Action['verify'] => ({ argv: ['gbrain', 'setup', harness, '--dry-run', '--json', ...(name === 'gbrain' ? [] : ['--name', name])] });
 
+// LOCAL PATCH (garrytan/gbrain#7771): compare two paths as files on disk (symlinks
+// resolved for the path, or for its directory when the file does not exist yet),
+// so a receipt target matches setup's own target.
+function sameFilePath(a: string, b: string): boolean {
+  const real = (p: string): string => {
+    try { return realpathSync(p); } catch { /* not there yet */ }
+    try { return resolvePath(realpathSync(dirname(p)), basename(p)); } catch { return resolvePath(p); }
+  };
+  return real(a) === real(b);
+}
+
 function ownerConflict(reason: string, message: string, fix: Pick<Action, 'actor' | 'why'> & Partial<Action>): OperationError {
   return opError('setup_owner_conflict', message, fix.user_message ?? fix.why, {
     reason, docs: 'docs/guides/repair.md#setup-owner-conflict',
@@ -457,7 +468,12 @@ export async function runSetup(args: string[]): Promise<number> {
         why: 'Preview a setup under another name, or remove that entry yourself and run setup again.', verify: verifyDryRun('claude-code', flags.name) }), out);
     }
     const harnessReceipt = readHarnessReceiptState(brainHome);
-    const harnessLane = harnessReceipt.state === 'ok' && harnessReceipt.receipt.targets.some((t) => t.host === 'claude-code');
+    // LOCAL PATCH (garrytan/gbrain#7771): the bootstrap harness lane conflicts only when
+    // its claude-code hooks land in the settings file setup writes, or at project scope
+    // (a project's settings apply to sessions from any HOME); another HOME's
+    // settings never fire twice in the sessions setup wires.
+    const harnessLane = harnessReceipt.state === 'ok' && harnessReceipt.receipt.targets.some((t) => t.host === 'claude-code' && t.kind === 'hooks'
+      && (t.scope !== 'user' || !t.path || sameFilePath(t.path, found.settingsPath)));
     const laneEvents = found.otherLaneEvents.filter((e) => (plan.events as string[]).includes(e));
     if (harnessLane || laneEvents.length > 0) {
       return refuse(ownerConflict('harness_lane', `${harnessLane ? '`gbrain bootstrap harness` already wires Claude Code for this install' : `${found.settingsPath} already wires ${laneEvents.join(', ')} through another gbrain install lane`}; two lanes would fire every hook twice.`, {
@@ -600,7 +616,11 @@ async function runCodexSetup(flags: SetupFlags, launcher: string, cfg: GBrainCon
         why: 'Preview a setup under another name, or remove that table yourself and run setup again.', verify: verifyDryRun('codex', flags.name) }), out);
     }
     const harnessReceipt = readHarnessReceiptState(brainHome);
-    const harnessLane = harnessReceipt.state === 'ok' && harnessReceipt.receipt.targets.some((t) => t.host === 'codex');
+    // LOCAL PATCH (garrytan/gbrain#7771): the bootstrap Codex targets (config.toml MCP
+    // block, AGENTS.md instructions) conflict only when they sit in the Codex home whose
+    // hooks.json setup writes; a target with no path is treated as conflicting.
+    const harnessLane = harnessReceipt.state === 'ok' && harnessReceipt.receipt.targets.some((t) => t.host === 'codex'
+      && (!t.path || sameFilePath(dirname(t.path), dirname(found.hooksPath))));
     const laneEvents = found.otherLaneEvents.filter((e) => (plan.events as string[]).includes(e));
     if (harnessLane || laneEvents.length > 0) {
       return refuse(ownerConflict('harness_lane', `${harnessLane ? '`gbrain bootstrap harness` already wires Codex for this install' : `${found.hooksPath} already wires ${laneEvents.join(', ')} through gbrain's bootstrap Codex lane`}; two lanes would fire every hook twice.`, {
